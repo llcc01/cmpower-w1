@@ -6,6 +6,7 @@ extern "C" {
 #include <ESP8266HTTPClient.h>
 #include <ESP8266WiFi.h>
 #include <ESP8266WiFiMulti.h>
+#include <LittleFS.h>
 #include <Ticker.h>
 #include <WiFiClient.h>
 #include <WiFiManager.h>  // https://github.com/tzapu/WiFiManager
@@ -13,6 +14,7 @@ extern "C" {
 
 #include "Adafruit_MQTT.h"
 #include "Adafruit_MQTT_Client.h"
+#include "FS.h"
 
 /************************* WiFi Access Point *********************************/
 
@@ -27,11 +29,14 @@ extern "C" {
 #define LED_ON LOW
 #define LED_OFF HIGH
 #define LED BUILTIN_LED
+#define LED_BLUE 16
+#define LED_RED 14
+#define BUTTON 4
 
 ESP8266WiFiMulti WiFiMulti;
 
-static const char* fingerprint PROGMEM =
-    "07a5d99a25df6ad4051950e2a5e08103aa3668b2";
+// static const char* fingerprint PROGMEM =
+//     "07a5d99a25df6ad4051950e2a5e08103aa3668b2";
 // const char caCert[] PROGMEM = R"EOF(
 // -----BEGIN CERTIFICATE-----
 // MIIFFjCCAv6gAwIBAgIRAJErCErPDBinU/bWLiWnX1owDQYJKoZIhvcNAQELBQAw
@@ -71,22 +76,16 @@ char username[] = "ESP_000000";
 char subTopic[] = "/lock/ESP_000000/cmd";
 // const String BUPT_LOGIN_PD = "user=2021211051&pass=123456";
 
-WiFiManagerParameter custom_mqtt_server("server", "mqtt server", "", 64);
-WiFiManagerParameter custom_mqtt_port("port", "mqtt port", "8883", 6);
-WiFiManagerParameter custom_password("password", "password", "", 32);
-WiFiManagerParameter custom_buptnet_user("buptnet_user", "buptnet_user", "",
-                                         10);
-WiFiManagerParameter custom_buptnet_pass("buptnet_pass", "buptnet_pass", "",
-                                         64);
+JSONVar conf;
 
 // WiFiFlientSecure for SSL/TLS support
 WiFiClientSecure client;
 
 // Setup the MQTT client class by passing in the WiFi client and MQTT server and
 // login details.
-Adafruit_MQTT_Client *mqtt;
+Adafruit_MQTT_Client* mqtt;
 
-Adafruit_MQTT_Subscribe *cmdCallbackSub;
+Adafruit_MQTT_Subscribe* cmdCallbackSub;
 
 /**NTP**/
 const char* ntpServerName = "cn.pool.ntp.org";
@@ -103,6 +102,36 @@ static bool tickerTimeoutFlag = false;
 /**** config ****/
 WiFiManager wm;
 
+bool loadConfig() {
+  File configFile = LittleFS.open("/config.json", "r");
+  if (!configFile) {
+    Serial.println("Failed to open config file");
+    return false;
+  }
+
+  conf = JSON.parse(configFile.readString());
+
+  if (JSON.typeof(conf) == "undefined") {
+    Serial.println("Failed to parse config file");
+    return false;
+  }
+
+  configFile.close();
+  return true;
+}
+
+bool saveConfig() {
+  File configFile = LittleFS.open("/config.json", "w");
+  if (!configFile) {
+    Serial.println("Failed to open config file for writing");
+    return false;
+  }
+
+  String jsonStr = JSON.stringify(conf);
+  configFile.println(jsonStr);
+  configFile.close();
+  return true;
+}
 
 void setRy1(int state) {
   digitalWrite(RY1_IO, state ? RY_ON : RY_OFF);
@@ -182,17 +211,24 @@ void mqttInit() {
   // client.setClientRSACert(certList, priKey);
   // client.allowSelfSignedCerts();
 
-  // X509List* ca = new X509List(caCert);
-  // client.setTrustAnchors(ca);
-  client.setFingerprint(fingerprint);
+  if (strlen((const char*)conf["ca_cert"])) {
+    String caStr = (const char*)conf["ca_cert"];
+    caStr.replace(" CERTIFICATE", "#CERTIFICATE");
+    caStr.replace(" ", "\n");
+    caStr.replace("#", " ");
+    X509List* ca = new X509List(caStr.c_str());
+    client.setTrustAnchors(ca);
+  } else if (strlen((const char*)conf["fingerprint"])) {
+    client.setFingerprint((const char*)conf["fingerprint"]);
+  }
 
-  sprintf(subTopic, "sn/lock/%s/cmd", username);
-  printf("username: %s\npassword: %s\nsub topic: %s\n", username, custom_password.getValue(),
-         subTopic);
+  sprintf(subTopic, "/lock/%s/cmd", username);
+  printf("username: %s\npassword: %s\nsub topic: %s\n", username,
+         (const char*)conf["password"], subTopic);
 
-  mqtt = new Adafruit_MQTT_Client(&client, custom_mqtt_server.getValue(),
-                              String(custom_mqtt_port.getValue()).toInt(),
-                              username, username, custom_password.getValue());
+  mqtt = new Adafruit_MQTT_Client(&client, (const char*)conf["mqtt_server"],
+                                  (int)conf["mqtt_port"], username, username,
+                                  (const char*)conf["password"]);
 
   cmdCallbackSub = new Adafruit_MQTT_Subscribe(mqtt, subTopic);
 
@@ -211,19 +247,27 @@ void mqttConnect() {
     return;
   }
 
-  Serial.print("Connecting to mqtt->.. ");
+  Serial.printf("Connecting to mqtt->.. %s:%d\n",
+                (const char*)conf["mqtt_server"], (int)conf["mqtt_port"]);
 
   uint8_t retries = 4;
   while ((ret = mqtt->connect()) != 0) {  // connect will return 0 for connected
     digitalWrite(LED, !digitalRead(LED));
     Serial.println(mqtt->connectErrorString(ret));
-    int lastSSLError = client.getLastSSLError();
+    char buf[256] = {0};
+    int lastSSLError = client.getLastSSLError(buf, sizeof(buf));
     if (lastSSLError) {
-      Serial.printf("SSL error: %d\n", lastSSLError);
+      String caStr = (const char*)conf["ca_cert"];
+      caStr.replace(" CERTIFICATE", "#CERTIFICATE");
+      caStr.replace(" ", "\n");
+      caStr.replace("#", " ");
+      Serial.printf("ca_cert: %s\n", caStr.c_str());
+      Serial.printf("fingerprint: %s\n", (const char*)conf["fingerprint"]);
+      Serial.printf("SSL error: %d\n%s\n", lastSSLError, buf);
     }
     Serial.println("Retrying MQTT connection in 5 seconds...");
     mqtt->disconnect();
-    delay(500);
+    delay(5000);
     retries--;
     if (retries == 0) {
       // // basically die and wait for WDT to reset me
@@ -258,6 +302,28 @@ void tickerTimeout() { tickerTimeoutFlag = true; }
 void tickerStart() { pingTicker.attach(MQTT_PING_TIME, tickerTimeout); }
 
 void webConfig() {
+  WiFiManagerParameter custom_mqtt_server("server", "mqtt server",
+                                          conf["mqtt_server"], 64);
+  WiFiManagerParameter custom_mqtt_port(
+      "port", "mqtt port", String((int)conf["mqtt_port"]).c_str(), 6);
+  WiFiManagerParameter custom_mqtts_ca_cert("ca_cert", "ca_cert",
+                                            conf["ca_cert"], 2048);
+  WiFiManagerParameter custom_mqtts_fingerprint(
+      "fingerprint", "mqtts sha1 fingerprint", conf["fingerprint"], 128);
+  WiFiManagerParameter custom_password("password", "password", conf["password"],
+                                       64);
+  WiFiManagerParameter custom_buptnet_user("buptnet_user", "buptnet_user",
+                                           conf["buptnet_user"], 10);
+  WiFiManagerParameter custom_buptnet_pass("buptnet_pass", "buptnet_pass", "",
+                                           64);
+
+  wm.addParameter(&custom_mqtt_server);
+  wm.addParameter(&custom_mqtt_port);
+  wm.addParameter(&custom_mqtts_ca_cert);
+  wm.addParameter(&custom_mqtts_fingerprint);
+  wm.addParameter(&custom_password);
+  wm.addParameter(&custom_buptnet_user);
+  wm.addParameter(&custom_buptnet_pass);
   wm.setConfigPortalBlocking(false);
   wm.startConfigPortal();
   while (wm.getConfigPortalActive()) {
@@ -266,6 +332,23 @@ void webConfig() {
     digitalWrite(LED, !digitalRead(LED));
   }
   Serial.println("config finish");
+  conf["mqtt_server"] = custom_mqtt_server.getValue();
+  conf["mqtt_port"] = String(custom_mqtt_port.getValue()).toInt();
+
+  conf["ca_cert"] = custom_mqtts_ca_cert.getValue();
+  Serial.println("ca_cert: ");
+  Serial.println(custom_mqtts_ca_cert.getValue());
+
+  conf["fingerprint"] = custom_mqtts_fingerprint.getValue();
+  Serial.println("fingerprint: ");
+  Serial.println(custom_mqtts_fingerprint.getValue());
+
+  conf["password"] = custom_password.getValue();
+  conf["buptnet_user"] = custom_buptnet_user.getValue();
+  if (custom_buptnet_pass.getValue() != "") {
+    conf["buptnet_pass"] = custom_buptnet_pass.getValue();
+  }
+  saveConfig();
   wm.reboot();
 }
 
@@ -279,8 +362,10 @@ bool buptLogin(const String& url, const String& ref) {
     Serial.print("[BUPT Login] POST...\n");
     // start connection and send HTTP header
     http.addHeader("Content-Type", "application/x-www-form-urlencoded");
-    int httpCode = http.POST("user=" + String(custom_buptnet_user.getValue()) +
-                             "&pass=" + String(custom_buptnet_pass.getValue()));
+    String postBody = "user=" + String(conf["buptnet_user"]) +
+                      "&pass=" + String(conf["buptnet_pass"]);
+    Serial.println(postBody);
+    int httpCode = http.POST(postBody);
 
     // httpCode will be negative on error
     if (httpCode > 0) {
@@ -356,6 +441,10 @@ void setup() {
 
   Serial.begin(115200);
   Serial.println();
+  Serial.print(F("\nReset reason = "));
+  auto rstInfo = ESP.getResetInfoPtr();
+  Serial.println(rstInfo->reason);
+
   uint32_t id = system_get_chip_id();
   sprintf(idChar, "%06X", id);
   Serial.print("chip id: ");
@@ -363,8 +452,14 @@ void setup() {
 
   sprintf(username, "ESP_%s", idChar);
 
+  if (!LittleFS.begin()) {
+    Serial.println("Failed to mount file system");
+    return;
+  }
+
   delay(3000);
-  if (!wm.getWiFiIsSaved()) {
+  if (!loadConfig() || !wm.getWiFiIsSaved() ||
+      rstInfo->reason == REASON_EXT_SYS_RST) {
     webConfig();
   }
 
@@ -381,6 +476,8 @@ void setup() {
         delay(500);
       }
   }
+
+  delay(1);
 
   configTime(8 * 3600, 0, ntpServerName, "pool.ntp.org", "time.nist.gov");
 
