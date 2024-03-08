@@ -1,0 +1,30 @@
+{
+    "configurations": [
+        {
+            "name": "Win32",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "~/.arduino15/packages/esp8266/hardware/esp8266/3.1.2/variants/nodemcu",
+                "~/.arduino15/packages/esp8266/hardware/esp8266/3.1.2/cores/esp8266/**",
+                "~/.arduino15/packages/esp8266/hardware/esp8266/3.1.2/tools/sdk/include/**",
+                "~/.arduino15/packages/esp8266/hardware/esp8266/3.1.2/tools/sdk/lwip2/include/**",
+                // "~/.arduino15/packages/esp8266/hardware/esp8266/3.1.2/tools/sdk/qio_qspi/include",
+                "~/.arduino15/packages/esp8266/tools/xtensa-lx106-elf-gcc/3.1.0-gcc10.3-e5f9fec/xtensa-lx106-elf/include/**",
+                // "~/.arduino15/packages/esp8266/tools/xtensa-lx106-elf-gcc/3.1.0-gcc10.3-e5f9fec/xtensa-lx106-elf/sys-include/**",
+                "~/.arduino15/packages/esp8266/hardware/esp8266/3.1.2/libraries/**",
+                "~/Arduino/libraries/**"
+            ],
+            "defines": [
+                "_DEBUG",
+                "UNICODE",
+                "_UNICODE",
+                "ARDUINO",
+                "ESP8266",
+            ],
+            "windowsSdkVersion": "10.0.22621.0",
+            "cStandard": "c17",
+            "cppStandard": "c++17"
+        }
+    ],
+    "version": 4
+}
