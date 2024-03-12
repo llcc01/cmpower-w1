@@ -306,15 +306,15 @@ void webConfig() {
                                           conf["mqtt_server"], 64);
   WiFiManagerParameter custom_mqtt_port(
       "port", "mqtt port", String((int)conf["mqtt_port"]).c_str(), 6);
-  WiFiManagerParameter custom_mqtts_ca_cert("ca_cert", "ca_cert",
+  WiFiManagerParameter custom_mqtts_ca_cert("ca_cert", "ca cert",
                                             conf["ca_cert"], 2048);
   WiFiManagerParameter custom_mqtts_fingerprint(
-      "fingerprint", "mqtts sha1 fingerprint", conf["fingerprint"], 128);
-  WiFiManagerParameter custom_password("password", "password", conf["password"],
+      "fingerprint", "sha1 fingerprint", conf["fingerprint"], 128);
+  WiFiManagerParameter custom_password("password", "mqtt password", conf["password"],
                                        64);
-  WiFiManagerParameter custom_buptnet_user("buptnet_user", "buptnet_user",
+  WiFiManagerParameter custom_buptnet_user("buptnet_user", "buptnet user",
                                            conf["buptnet_user"], 10);
-  WiFiManagerParameter custom_buptnet_pass("buptnet_pass", "buptnet_pass", "",
+  WiFiManagerParameter custom_buptnet_pass("buptnet_pass", "buptnet pass", "",
                                            64);
 
   wm.addParameter(&custom_mqtt_server);
