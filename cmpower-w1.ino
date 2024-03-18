@@ -15,9 +15,9 @@ extern "C" {
 #include "Adafruit_MQTT.h"
 #include "Adafruit_MQTT_Client.h"
 #include "FS.h"
+#include "sy7t609.h"
 
 /************************* WiFi Access Point *********************************/
-
 
 #define RY1_IO 0
 #define RY2_IO 12
@@ -36,7 +36,8 @@ ESP8266WiFiMulti WiFiMulti;
 
 char idChar[] = "000000";
 char username[] = "ESP_000000";
-char subTopic[] = "/lock/ESP_000000/cmd";
+char subTopic[] = "/ESP_000000/cmd";
+char pubTopic[] = "/ESP_000000/status";
 
 JSONVar conf;
 
@@ -55,7 +56,11 @@ const char* ntpServerName = "cn.pool.ntp.org";
 /**** Ticker ****/
 Ticker pingTicker;
 #define MQTT_PING_TIME 120  // second
-static bool tickerTimeoutFlag = false;
+static bool pingTickerTimeoutFlag = false;
+
+Ticker sensorTicker;
+#define SENSOR_TIME 60  // second
+static bool sensorTickerTimeoutFlag = true;
 
 #define CMD_SWITCH_UNKNOWN -1
 #define CMD_SWITCH_ON 1
@@ -67,14 +72,14 @@ WiFiManager wm;
 bool loadConfig() {
   File configFile = LittleFS.open("/config.json", "r");
   if (!configFile) {
-    Serial.println("Failed to open config file");
+    // Serial.println("Failed to open config file");
     return false;
   }
 
   conf = JSON.parse(configFile.readString());
 
   if (JSON.typeof(conf) == "undefined") {
-    Serial.println("Failed to parse config file");
+    // Serial.println("Failed to parse config file");
     return false;
   }
 
@@ -85,7 +90,7 @@ bool loadConfig() {
 bool saveConfig() {
   File configFile = LittleFS.open("/config.json", "w");
   if (!configFile) {
-    Serial.println("Failed to open config file for writing");
+    // Serial.println("Failed to open config file for writing");
     return false;
   }
 
@@ -115,15 +120,15 @@ int getCmdSwitch(JSONVar* cmd, const String& key) {
     return CMD_SWITCH_UNKNOWN;
   }
   bool f = (bool)(*cmd)[key];
-  Serial.println(key + ": " + (f ? "on" : "off"));
+  // Serial.println(key + ": " + (f ? "on" : "off"));
   return f ? CMD_SWITCH_ON : CMD_SWITCH_OFF;
 }
 
 void cmdCallback(char* data, uint16_t len) {
-  Serial.println(data);
+  // Serial.println(data);
   JSONVar cmd = JSON.parse(data);
   if (JSON.typeof(cmd) == "undefined") {
-    Serial.println("Parsing cmd failed!");
+    // Serial.println("Parsing cmd failed!");
     return;
   }
 
@@ -135,6 +140,14 @@ void cmdCallback(char* data, uint16_t len) {
   int ry2 = getCmdSwitch(&cmd, "ry2");
   if (ry2 >= 0) {
     setRy2(ry2);
+  }
+
+  if (cmd.hasOwnProperty("counterReset")) {
+    clearEnergyCounters();
+  }
+
+  if (cmd.hasOwnProperty("sensorUpdate")) {
+    sensorUpdate();
   }
 }
 
@@ -151,25 +164,25 @@ void ioInit() {
 
 void wifiInit() {
   WiFi.mode(WIFI_STA);
-  Serial.print("Connecting to ");
-  Serial.println(wm.getWiFiSSID());
+  // Serial.print("Connecting to ");
+  // Serial.println(wm.getWiFiSSID());
   WiFi.begin(wm.getWiFiSSID(), wm.getWiFiPass());
-  // Serial.println(WLAN_SSID);
+  // // Serial.println(WLAN_SSID);
   // WiFi.begin(WLAN_SSID, WLAN_PASS);
   // WiFiMulti.addAP(WLAN_SSID, WLAN_PASS);
 
   while (WiFi.status() != WL_CONNECTED) {
     // while (WiFiMulti.run() != WL_CONNECTED) {
     delay(250);
-    Serial.print(".");
+    // Serial.print(".");
     digitalWrite(LED_BLUE, !digitalRead(LED_BLUE));
   }
-  Serial.println();
+  // Serial.println();
   digitalWrite(LED_BLUE, LED_ON);
 
-  Serial.println("WiFi connected");
-  Serial.println("IP address: ");
-  Serial.println(WiFi.localIP());
+  // Serial.println("WiFi connected");
+  // Serial.println("IP address: ");
+  // Serial.println(WiFi.localIP());
 }
 
 void mqttInit() {
@@ -190,9 +203,10 @@ void mqttInit() {
     client.setFingerprint((const char*)conf["fingerprint"]);
   }
 
-  sprintf(subTopic, "/lock/%s/cmd", username);
-  printf("username: %s\npassword: %s\nsub topic: %s\n", username,
-         (const char*)conf["password"], subTopic);
+  sprintf(subTopic, "/%s/cmd", username);
+  sprintf(pubTopic, "/%s/status", username);
+  // Serial.printf("username: %s\npassword: %s\nsub topic: %s\n", username,
+  //        (const char*)conf["password"], subTopic);
 
   mqtt = new Adafruit_MQTT_Client(&client, (const char*)conf["mqtt_server"],
                                   (int)conf["mqtt_port"], username, username,
@@ -215,13 +229,13 @@ void mqttConnect() {
     return;
   }
 
-  Serial.printf("Connecting to mqtt->.. %s:%d\n",
-                (const char*)conf["mqtt_server"], (int)conf["mqtt_port"]);
+  // Serial.printf("Connecting to mqtt->.. %s:%d\n",
+  //               (const char*)conf["mqtt_server"], (int)conf["mqtt_port"]);
 
   uint8_t retries = 4;
   while ((ret = mqtt->connect()) != 0) {  // connect will return 0 for connected
     digitalWrite(LED_RED, !digitalRead(LED_RED));
-    Serial.println(mqtt->connectErrorString(ret));
+    // Serial.println(mqtt->connectErrorString(ret));
     char buf[256] = {0};
     int lastSSLError = client.getLastSSLError(buf, sizeof(buf));
     if (lastSSLError) {
@@ -229,11 +243,11 @@ void mqttConnect() {
       caStr.replace(" CERTIFICATE", "#CERTIFICATE");
       caStr.replace(" ", "\n");
       caStr.replace("#", " ");
-      Serial.printf("ca_cert: %s\n", caStr.c_str());
-      Serial.printf("fingerprint: %s\n", (const char*)conf["fingerprint"]);
-      Serial.printf("SSL error: %d\n%s\n", lastSSLError, buf);
+      // Serial.printf("ca_cert: %s\n", caStr.c_str());
+      // Serial.printf("fingerprint: %s\n", (const char*)conf["fingerprint"]);
+      // Serial.printf("SSL error: %d\n%s\n", lastSSLError, buf);
     }
-    Serial.println("Retrying MQTT connection in 5 seconds...");
+    // Serial.println("Retrying MQTT connection in 5 seconds...");
     mqtt->disconnect();
     delay(5000);
     retries--;
@@ -245,7 +259,7 @@ void mqttConnect() {
     }
   }
 
-  Serial.println("MQTT Connected!");
+  // Serial.println("MQTT Connected!");
 
   tickerStart();
 }
@@ -259,15 +273,21 @@ void mqttPing() {
   if (!mqtt->ping()) {
     mqtt->disconnect();
     pingTicker.detach();
+    sensorTicker.detach();
     return;
   }
   delay(100);
   digitalWrite(LED_RED, LED_ON);
 }
 
-void tickerTimeout() { tickerTimeoutFlag = true; }
+void pingTickerTimeout() { pingTickerTimeoutFlag = true; }
 
-void tickerStart() { pingTicker.attach(MQTT_PING_TIME, tickerTimeout); }
+void sensorTickerTimeout() { sensorTickerTimeoutFlag = true; }
+
+void tickerStart() {
+  pingTicker.attach(MQTT_PING_TIME, pingTickerTimeout);
+  sensorTicker.attach(SENSOR_TIME, sensorTickerTimeout);
+}
 
 void webConfig() {
   WiFiManagerParameter custom_mqtt_server("server", "mqtt server",
@@ -300,17 +320,17 @@ void webConfig() {
     digitalWrite(LED_RED, !digitalRead(LED_RED));
     digitalWrite(LED_BLUE, !digitalRead(LED_BLUE));
   }
-  Serial.println("config finish");
+  // Serial.println("config finish");
   conf["mqtt_server"] = custom_mqtt_server.getValue();
   conf["mqtt_port"] = String(custom_mqtt_port.getValue()).toInt();
 
   conf["ca_cert"] = custom_mqtts_ca_cert.getValue();
-  Serial.println("ca_cert: ");
-  Serial.println(custom_mqtts_ca_cert.getValue());
+  // Serial.println("ca_cert: ");
+  // Serial.println(custom_mqtts_ca_cert.getValue());
 
   conf["fingerprint"] = custom_mqtts_fingerprint.getValue();
-  Serial.println("fingerprint: ");
-  Serial.println(custom_mqtts_fingerprint.getValue());
+  // Serial.println("fingerprint: ");
+  // Serial.println(custom_mqtts_fingerprint.getValue());
 
   conf["password"] = custom_password.getValue();
   conf["buptnet_user"] = custom_buptnet_user.getValue();
@@ -325,39 +345,39 @@ bool buptLogin(const String& url, const String& ref) {
   WiFiClient client;
   HTTPClient http;
   bool res = false;
-  Serial.print("[BUPTNET Login] begin...\n");
+  // Serial.print("[BUPTNET Login] begin...\n");
   if (http.begin(client, url)) {  // HTTP
 
-    Serial.print("[BUPTNET Login] POST...\n");
+    // Serial.print("[BUPTNET Login] POST...\n");
     // start connection and send HTTP header
     http.addHeader("Content-Type", "application/x-www-form-urlencoded");
     String postBody = "user=" + String(conf["buptnet_user"]) +
                       "&pass=" + String(conf["buptnet_pass"]);
-    // Serial.println(postBody);
+    // // Serial.println(postBody);
     int httpCode = http.POST(postBody);
 
     // httpCode will be negative on error
     if (httpCode > 0) {
       // HTTP header has been send and Server response header has been handled
-      Serial.printf("[BUPTNET Login] code: %d\n", httpCode);
+      // Serial.printf("[BUPTNET Login] code: %d\n", httpCode);
       if (httpCode != HTTP_CODE_OK) {
-        Serial.println("[BUPTNET Login] fail");
-        Serial.println(http.getLocation());
+        // Serial.println("[BUPTNET Login] fail");
+        // Serial.println(http.getLocation());
       } else if (http.getString().indexOf("登录成功") == -1) {
-        Serial.println("[BUPTNET Login] incorrect password");
-        Serial.println(http.getString());
+        // Serial.println("[BUPTNET Login] incorrect password");
+        // Serial.println(http.getString());
       } else {
         res = true;
       }
 
     } else {
-      Serial.printf("[BUPTNET Login] GET... failed, error: %s\n",
-                    http.errorToString(httpCode).c_str());
+      // Serial.printf("[BUPTNET Login] GET... failed, error: %s\n",
+      //               http.errorToString(httpCode).c_str());
     }
 
     http.end();
   } else {
-    Serial.printf("[BUPTNET Login] Unable to connect\n");
+    // Serial.printf("[BUPTNET Login] Unable to connect\n");
   }
 
   return res;
@@ -367,17 +387,17 @@ bool testPage(const String& url, String& retLoc) {
   WiFiClient client;
   HTTPClient httpTest;
   bool res = false;
-  Serial.print("[Test Page] begin...\n");
+  // Serial.print("[Test Page] begin...\n");
   if (httpTest.begin(client, url)) {  // HTTP
 
-    Serial.print("[Test Page] GET " + url + "...\n");
+    // Serial.print("[Test Page] GET " + url + "...\n");
     // start connection and send HTTP header
     int httpCode = httpTest.GET();
 
     // httpCode will be negative on error
     if (httpCode > 0) {
       // HTTP header has been send and Server response header has been handled
-      Serial.printf("[Test Page] GET... code: %d\n", httpCode);
+      // Serial.printf("[Test Page] GET... code: %d\n", httpCode);
 
       // file found at server
       if (httpCode == HTTP_CODE_OK) {
@@ -386,13 +406,13 @@ bool testPage(const String& url, String& retLoc) {
         retLoc = httpTest.getLocation();
       }
     } else {
-      Serial.printf("[Test Page] GET... failed, error: %s\n",
-                    httpTest.errorToString(httpCode).c_str());
+      // Serial.printf("[Test Page] GET... failed, error: %s\n",
+      //               httpTest.errorToString(httpCode).c_str());
     }
 
     httpTest.end();
   } else {
-    Serial.printf("[Test Page] Unable to connect\n");
+    // Serial.printf("[Test Page] Unable to connect\n");
   }
 
   return res;
@@ -434,6 +454,38 @@ void ICACHE_RAM_ATTR handleKeyPress() {
   wm.reboot();
 }
 
+void sensorUpdate() {
+  // // Serial.println("sensor update");
+  // digitalWrite(LED_RED, !digitalRead(LED_RED));
+
+  sy7t609MeasurementProcess();
+
+  sy7t609_info_t info = getSy7t609Info();
+  JSONVar data;
+  data["ry1"] = digitalRead(RY1_IO) == RY_ON;
+  data["ry2"] = digitalRead(RY2_IO) == RY_ON;
+  data["power"] = info.power;
+  data["avg_power"] = info.avg_power;
+  data["vrms"] = info.vrms;
+  data["irms"] = info.irms;
+  data["freq"] = info.freq;
+  data["pf"] = info.pf;
+  data["epp_cnt"] = info.epp_cnt;
+  data["eem_cnt"] = info.eem_cnt;
+  mqtt->publish(pubTopic, JSON.stringify(data).c_str());
+}
+
+void reportErr(String name, size_t errCode) {
+  if (!mqtt->connected()) {
+    return;
+  }
+
+  JSONVar data;
+  data["err"] = name;
+  data["errCode"] = errCode;
+  mqtt->publish(pubTopic, JSON.stringify(data).c_str());
+}
+
 void setup() {
   ioInit();
   setRy1(false);
@@ -442,21 +494,21 @@ void setup() {
   digitalWrite(LED_RED, LED_ON);
   digitalWrite(LED_BLUE, LED_ON);
 
-  Serial.begin(115200);
-  Serial.println();
-  Serial.print(F("\nReset reason = "));
+  Serial.begin(9600);
+  // Serial.println();
+  // Serial.print(F("\nReset reason = "));
   auto rstInfo = ESP.getResetInfoPtr();
-  Serial.println(rstInfo->reason);
+  // Serial.println(rstInfo->reason);
 
   uint32_t id = system_get_chip_id();
   sprintf(idChar, "%06X", id);
-  Serial.print("chip id: ");
-  Serial.println(id, HEX);
+  // Serial.print("chip id: ");
+  // Serial.println(id, HEX);
 
   sprintf(username, "ESP_%s", idChar);
 
   if (!LittleFS.begin()) {
-    Serial.println("Failed to mount file system");
+    // Serial.println("Failed to mount file system");
     return;
   }
 
@@ -476,11 +528,11 @@ void setup() {
 
   String reUrl;
   if (!testPage("http://www.example.com/?cmd=redirect&arubalp=12345", reUrl)) {
-    Serial.println(reUrl);
+    // Serial.println(reUrl);
     testPage(reUrl);
     int pos = reUrl.indexOf('/', 7);
     String serverUrl = reUrl.substring(0, pos);
-    Serial.println(serverUrl);
+    // Serial.println(serverUrl);
     if (!buptLogin(serverUrl + "/login", reUrl)) {
       digitalWrite(LED_BLUE, LED_ON);
       digitalWrite(LED_RED, LED_OFF);
@@ -497,6 +549,13 @@ void setup() {
   configTime(8 * 3600, 0, ntpServerName, "pool.ntp.org", "time.nist.gov");
 
   mqttInit();
+
+  mqttConnect();
+
+  uint8_t err = initSy7t609();
+  if (err) {
+    reportErr("initSy7t609", err);
+  }
 }
 
 void loop() {
@@ -509,9 +568,13 @@ void loop() {
     if (mqtt->connected()) {
       digitalWrite(LED_RED, LED_ON);
       mqtt->processPackets(10);
-      if (tickerTimeoutFlag) {
-        tickerTimeoutFlag = false;
+      if (pingTickerTimeoutFlag) {
+        pingTickerTimeoutFlag = false;
         mqttPing();
+      }
+      if (sensorTickerTimeoutFlag) {
+        sensorTickerTimeoutFlag = false;
+        sensorUpdate();
       }
     }
   }
