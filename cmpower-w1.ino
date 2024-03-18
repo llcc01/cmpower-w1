@@ -437,12 +437,14 @@ void ICACHE_RAM_ATTR handleKeyPress() {
       } else {
         setRy1(true);
       }
+      sensorTickerTimeoutFlag = true; // force update
       return;
     }
   }
 
   setRy1(false);
   setRy2(false);
+  sensorTickerTimeoutFlag = true; // force update
 
   for (int i = 0; i < 400; i++) {
     delayMicroseconds(10000);
