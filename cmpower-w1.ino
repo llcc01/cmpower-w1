@@ -473,7 +473,7 @@ void sensorUpdate() {
   data["freq"] = info.freq;
   data["pf"] = info.pf;
   data["epp_cnt"] = info.epp_cnt;
-  data["eem_cnt"] = info.eem_cnt;
+  data["epm_cnt"] = info.epm_cnt;
   mqtt->publish(pubTopic, JSON.stringify(data).c_str());
 }
 

@@ -13,7 +13,7 @@ typedef struct sy7t609_info {
   uint32_t pf;
   uint32_t freq;
   uint32_t epp_cnt;
-  uint32_t eem_cnt;
+  uint32_t epm_cnt;
 } sy7t609_info_t;
 
 uint8_t initSy7t609(void);

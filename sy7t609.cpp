@@ -66,7 +66,7 @@ void sy7t609MeasurementProcess(void) {
   tmp.avg_power = readAvgPower();
   tmp.freq = readFrequency();
   tmp.epp_cnt = readEPPCNT();
-  tmp.eem_cnt = readEPMCNT();
+  tmp.epm_cnt = readEPMCNT();
   updateInfo(tmp);
 }
 
