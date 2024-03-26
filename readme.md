@@ -112,6 +112,10 @@ JSON 封装
 - buptnet_pass
   - 北邮校园网密码，不填时不修改
 
+## 接入 HA
+
+作为 MQTT 客户端接入服务器，参考配置文件 `ha_configuration.yaml`
+
 ## 参考
 
 [更新-计量已搞定]20 元的中移铁通插排：ESP+功率计量

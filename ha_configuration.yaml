@@ -1,0 +1,91 @@
+mqtt:
+  button:
+    - name: "switch main on"
+      unique_id: "switch_main_on"
+      command_topic: "/ESP_000000/cmd"
+      payload_press: "{\"ry1\":true,\"sensorUpdate\":{}}"
+      availability:
+        - topic: "/ESP_000000/status"
+          value_template: "{{ value_json.ry1 }}"
+          payload_available: false
+          payload_not_available: true
+    - name: "switch main off"
+      unique_id: "switch_main_off"
+      command_topic: "/ESP_000000/cmd"
+      payload_press: "{\"ry1\":false,\"sensorUpdate\":{}}"
+      availability:
+        - topic: "/ESP_000000/status"
+          value_template: "{{ value_json.ry1 }}"
+          payload_available: true
+          payload_not_available: false
+    - name: "switch ch2 on"
+      unique_id: "switch_ch2_on"
+      command_topic: "/ESP_000000/cmd"
+      payload_press: "{\"ry2\":true,\"sensorUpdate\":{}}"
+      availability:
+        - topic: "/ESP_000000/status"
+          value_template: "{{ value_json.ry2 }}"
+          payload_available: false
+          payload_not_available: true
+    - name: "switch ch2 off"
+      unique_id: "switch_ch2_off"
+      command_topic: "/ESP_000000/cmd"
+      payload_press: "{\"ry2\":false,\"sensorUpdate\":{}}"
+      availability:
+        - topic: "/ESP_000000/status"
+          value_template: "{{ value_json.ry2 }}"
+          payload_available: true
+          payload_not_available: false
+    - name: "switch refresh"
+      unique_id: "switch_refresh"
+      command_topic: "/ESP_000000/cmd"
+      payload_press: "{\"sensorUpdate\":{}}"
+    - name: "switch reset counter"
+      unique_id: "switch_reset_cnt"
+      command_topic: "/ESP_000000/cmd"
+      payload_press: "{\"counterReset\":{}}"
+
+  binary_sensor:
+    - name: "power main"
+      unique_id: "power_ry1"
+      state_topic: "/ESP_000000/status"
+      value_template: "{{ value_json.ry1 }}"
+      payload_on: true
+      payload_off: false
+    - name: "power ch2"
+      unique_id: "power_ry2"
+      state_topic: "/ESP_000000/status"
+      value_template: "{{ value_json.ry2 }}"
+      payload_on: true
+      payload_off: false
+  sensor:
+    - name: "vrms"
+      unique_id: "power_vrms"
+      state_topic: "/ESP_000000/status"
+      device_class: "voltage"
+      unit_of_measurement: "V"
+      value_template: "{{ value_json.vrms/1000 }}"
+    - name: "freq"
+      unique_id: "power_freq"
+      device_class: "frequency"
+      state_topic: "/ESP_000000/status"
+      unit_of_measurement: "Hz"
+      value_template: "{{ value_json.freq/1000 }}"
+    - name: "power"
+      unique_id: "power_power"
+      device_class: "power"
+      state_topic: "/ESP_000000/status"
+      unit_of_measurement: "W"
+      value_template: "{{ value_json.power/1000 }}"
+    - name: "energy"
+      unique_id: "power_energy"
+      device_class: "energy"
+      state_topic: "/ESP_000000/status"
+      unit_of_measurement: "Wh"
+      value_template: "{{ value_json.epp_cnt }}" 
+
+
+
+
+
+
