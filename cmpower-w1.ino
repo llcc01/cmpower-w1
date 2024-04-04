@@ -2,20 +2,21 @@
 extern "C" {
 #include "user_interface.h"
 }
+#include <Adafruit_MQTT.h>
+#include <Adafruit_MQTT_Client.h>
 #include <Arduino_JSON.h>
 #include <ESP8266HTTPClient.h>
 #include <ESP8266WiFi.h>
 #include <ESP8266WiFiMulti.h>
-#include <LittleFS.h>
 #include <Ticker.h>
 #include <WiFiClient.h>
 #include <WiFiManager.h>  // https://github.com/tzapu/WiFiManager
 #include <WiFiUdp.h>
+#include <LittleFS.h>
 
-#include "Adafruit_MQTT.h"
-#include "Adafruit_MQTT_Client.h"
-#include "FS.h"
 #include "sy7t609.h"
+#include "conf.h"
+#include "net-login.h"
 
 /************************* WiFi Access Point *********************************/
 
@@ -35,20 +36,18 @@ extern "C" {
 ESP8266WiFiMulti WiFiMulti;
 
 char idChar[] = "000000";
-char username[] = "ESP_000000";
-char subTopic[] = "/ESP_000000/cmd";
-char pubTopic[] = "/ESP_000000/status";
-
-JSONVar conf;
+String username;
+String subTopic;
+String pubTopic;
 
 // WiFiFlientSecure for SSL/TLS support
 WiFiClientSecure client;
 
 // Setup the MQTT client class by passing in the WiFi client and MQTT server and
 // login details.
-Adafruit_MQTT_Client* mqtt;
+Adafruit_MQTT_Client* mqtt = NULL;
 
-Adafruit_MQTT_Subscribe* cmdCallbackSub;
+Adafruit_MQTT_Subscribe* cmdCallbackSub = NULL;
 
 /**NTP**/
 const char* ntpServerName = "cn.pool.ntp.org";
@@ -68,37 +67,6 @@ static bool sensorTickerTimeoutFlag = true;
 
 /**** config ****/
 WiFiManager wm;
-
-bool loadConfig() {
-  File configFile = LittleFS.open("/config.json", "r");
-  if (!configFile) {
-    // Serial.println("Failed to open config file");
-    return false;
-  }
-
-  conf = JSON.parse(configFile.readString());
-
-  if (JSON.typeof(conf) == "undefined") {
-    // Serial.println("Failed to parse config file");
-    return false;
-  }
-
-  configFile.close();
-  return true;
-}
-
-bool saveConfig() {
-  File configFile = LittleFS.open("/config.json", "w");
-  if (!configFile) {
-    // Serial.println("Failed to open config file for writing");
-    return false;
-  }
-
-  String jsonStr = JSON.stringify(conf);
-  configFile.println(jsonStr);
-  configFile.close();
-  return true;
-}
 
 void setRy1(bool state) {
   digitalWrite(RY1_IO, state ? RY_ON : RY_OFF);
@@ -203,16 +171,23 @@ void mqttInit() {
     client.setFingerprint((const char*)conf["fingerprint"]);
   }
 
-  sprintf(subTopic, "/%s/cmd", username);
-  sprintf(pubTopic, "/%s/status", username);
+  subTopic = String("/") + username + "/cmd";
+  pubTopic = String("/") + username + "/status";
+
   // Serial.printf("username: %s\npassword: %s\nsub topic: %s\n", username,
   //        (const char*)conf["password"], subTopic);
 
+  if (mqtt) {
+    delete mqtt;
+  }
   mqtt = new Adafruit_MQTT_Client(&client, (const char*)conf["mqtt_server"],
-                                  (int)conf["mqtt_port"], username, username,
+                                  (int)conf["mqtt_port"], username.c_str(), username.c_str(),
                                   (const char*)conf["password"]);
 
-  cmdCallbackSub = new Adafruit_MQTT_Subscribe(mqtt, subTopic);
+  if (cmdCallbackSub) {
+    delete cmdCallbackSub;
+  }
+  cmdCallbackSub = new Adafruit_MQTT_Subscribe(mqtt, subTopic.c_str());
 
   cmdCallbackSub->setCallback(cmdCallback);
 
@@ -341,88 +316,6 @@ void webConfig() {
   wm.reboot();
 }
 
-bool buptLogin(const String& url, const String& ref) {
-  WiFiClient client;
-  HTTPClient http;
-  bool res = false;
-  // Serial.print("[BUPTNET Login] begin...\n");
-  if (http.begin(client, url)) {  // HTTP
-
-    // Serial.print("[BUPTNET Login] POST...\n");
-    // start connection and send HTTP header
-    http.addHeader("Content-Type", "application/x-www-form-urlencoded");
-    String postBody = "user=" + String(conf["buptnet_user"]) +
-                      "&pass=" + String(conf["buptnet_pass"]);
-    // // Serial.println(postBody);
-    int httpCode = http.POST(postBody);
-
-    // httpCode will be negative on error
-    if (httpCode > 0) {
-      // HTTP header has been send and Server response header has been handled
-      // Serial.printf("[BUPTNET Login] code: %d\n", httpCode);
-      if (httpCode != HTTP_CODE_OK) {
-        // Serial.println("[BUPTNET Login] fail");
-        // Serial.println(http.getLocation());
-      } else if (http.getString().indexOf("登录成功") == -1) {
-        // Serial.println("[BUPTNET Login] incorrect password");
-        // Serial.println(http.getString());
-      } else {
-        res = true;
-      }
-
-    } else {
-      // Serial.printf("[BUPTNET Login] GET... failed, error: %s\n",
-      //               http.errorToString(httpCode).c_str());
-    }
-
-    http.end();
-  } else {
-    // Serial.printf("[BUPTNET Login] Unable to connect\n");
-  }
-
-  return res;
-}
-
-bool testPage(const String& url, String& retLoc) {
-  WiFiClient client;
-  HTTPClient httpTest;
-  bool res = false;
-  // Serial.print("[Test Page] begin...\n");
-  if (httpTest.begin(client, url)) {  // HTTP
-
-    // Serial.print("[Test Page] GET " + url + "...\n");
-    // start connection and send HTTP header
-    int httpCode = httpTest.GET();
-
-    // httpCode will be negative on error
-    if (httpCode > 0) {
-      // HTTP header has been send and Server response header has been handled
-      // Serial.printf("[Test Page] GET... code: %d\n", httpCode);
-
-      // file found at server
-      if (httpCode == HTTP_CODE_OK) {
-        res = true;
-      } else {
-        retLoc = httpTest.getLocation();
-      }
-    } else {
-      // Serial.printf("[Test Page] GET... failed, error: %s\n",
-      //               httpTest.errorToString(httpCode).c_str());
-    }
-
-    httpTest.end();
-  } else {
-    // Serial.printf("[Test Page] Unable to connect\n");
-  }
-
-  return res;
-}
-
-bool testPage(String url) {
-  String nu;
-  return testPage(url, nu);
-}
-
 void ICACHE_RAM_ATTR handleKeyPress() {
   delayMicroseconds(50000);
   if (digitalRead(BUTTON) == HIGH) {
@@ -437,14 +330,14 @@ void ICACHE_RAM_ATTR handleKeyPress() {
       } else {
         setRy1(true);
       }
-      sensorTickerTimeoutFlag = true; // force update
+      sensorTickerTimeoutFlag = true;  // force update
       return;
     }
   }
 
   setRy1(false);
   setRy2(false);
-  sensorTickerTimeoutFlag = true; // force update
+  sensorTickerTimeoutFlag = true;  // force update
 
   for (int i = 0; i < 400; i++) {
     delayMicroseconds(10000);
@@ -474,7 +367,7 @@ void sensorUpdate() {
   data["pf"] = info.pf;
   data["epp_cnt"] = info.epp_cnt;
   data["epm_cnt"] = info.epm_cnt;
-  mqtt->publish(pubTopic, JSON.stringify(data).c_str());
+  mqtt->publish(pubTopic.c_str(), JSON.stringify(data).c_str());
 }
 
 void reportErr(String name, size_t errCode) {
@@ -485,7 +378,7 @@ void reportErr(String name, size_t errCode) {
   JSONVar data;
   data["err"] = name;
   data["errCode"] = errCode;
-  mqtt->publish(pubTopic, JSON.stringify(data).c_str());
+  mqtt->publish(pubTopic.c_str(), JSON.stringify(data).c_str());
 }
 
 void setup() {
@@ -507,7 +400,7 @@ void setup() {
   // Serial.print("chip id: ");
   // Serial.println(id, HEX);
 
-  sprintf(username, "ESP_%s", idChar);
+  username = "ESP_" + String(idChar);
 
   if (!LittleFS.begin()) {
     // Serial.println("Failed to mount file system");
