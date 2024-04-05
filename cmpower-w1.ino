@@ -5,20 +5,26 @@ extern "C" {
 #include <Adafruit_MQTT.h>
 #include <Adafruit_MQTT_Client.h>
 #include <Arduino_JSON.h>
+#include <Crypto.h>
 #include <ESP8266HTTPClient.h>
 #include <ESP8266WiFi.h>
 #include <ESP8266WiFiMulti.h>
+#include <LittleFS.h>
 #include <Ticker.h>
 #include <WiFiClient.h>
 #include <WiFiManager.h>  // https://github.com/tzapu/WiFiManager
 #include <WiFiUdp.h>
-#include <LittleFS.h>
 
-#include "sy7t609.h"
 #include "conf.h"
 #include "net-login.h"
+#include "sy7t609.h"
+#include "test.h"
 
 /************************* WiFi Access Point *********************************/
+
+#define TIMESTAMP_YEAR2024 1704067200
+
+#define USE_TUYA 1
 
 #define RY1_IO 0
 #define RY2_IO 12
@@ -36,9 +42,18 @@ extern "C" {
 ESP8266WiFiMulti WiFiMulti;
 
 char idChar[] = "000000";
+
+String clientId;
 String username;
+String password;
+
 String subTopic;
 String pubTopic;
+
+#if USE_TUYA
+String TYDeviceID;
+String TYDeviceSecret;
+#endif
 
 // WiFiFlientSecure for SSL/TLS support
 WiFiClientSecure client;
@@ -171,18 +186,43 @@ void mqttInit() {
     client.setFingerprint((const char*)conf["fingerprint"]);
   }
 
-  subTopic = String("/") + username + "/cmd";
-  pubTopic = String("/") + username + "/status";
-
-  // Serial.printf("username: %s\npassword: %s\nsub topic: %s\n", username,
-  //        (const char*)conf["password"], subTopic);
-
   if (mqtt) {
     delete mqtt;
   }
+
+#if USE_TUYA
+  while (time(nullptr) < TIMESTAMP_YEAR2024) {
+    Serial.println("waiting for ntp sync");
+    delay(1000);
+  }
+
+  clientId = "tuyalink_" + TYDeviceID;
+
+  String timestamp = String(time(nullptr));
+  username = TYDeviceID + "|signMethod=hmacSha256,timestamp=" + timestamp +
+             ",secureMode=1,accessType=1";
+  String content = "deviceId=" + TYDeviceID + ",timestamp=" + timestamp +
+                   ",secureMode=1,accessType=1";
+
+  password = experimental::crypto::SHA256::hmac(content, TYDeviceSecret.c_str(),
+                                                TYDeviceSecret.length(), 32);
+  password.toLowerCase();
+  subTopic = "tylink/" + TYDeviceID + "/thing/action/execute";
+#else
+  subTopic = String("/") + username + "/cmd";
+  pubTopic = String("/") + username + "/status";
+
+  username = "ESP_" + String(idChar);
+  clientId = "ESP_" + String(idChar);
+  password = (const char*)conf["password"];
+#endif
+  Serial.printf("clientId: %s\nusername: %s\npassword: %s\nsub topic: %s\n",
+                clientId.c_str(), username.c_str(), password.c_str(),
+                subTopic.c_str());
+
   mqtt = new Adafruit_MQTT_Client(&client, (const char*)conf["mqtt_server"],
-                                  (int)conf["mqtt_port"], username.c_str(), username.c_str(),
-                                  (const char*)conf["password"]);
+                                  (int)conf["mqtt_port"], clientId.c_str(),
+                                  username.c_str(), password.c_str());
 
   if (cmdCallbackSub) {
     delete cmdCallbackSub;
@@ -204,13 +244,13 @@ void mqttConnect() {
     return;
   }
 
-  // Serial.printf("Connecting to mqtt->.. %s:%d\n",
-  //               (const char*)conf["mqtt_server"], (int)conf["mqtt_port"]);
+  Serial.printf("Connecting to mqtt->.. %s:%d\n",
+                (const char*)conf["mqtt_server"], (int)conf["mqtt_port"]);
 
-  uint8_t retries = 4;
+  uint8_t retries = 1;
   while ((ret = mqtt->connect()) != 0) {  // connect will return 0 for connected
     digitalWrite(LED_RED, !digitalRead(LED_RED));
-    // Serial.println(mqtt->connectErrorString(ret));
+    Serial.println(mqtt->connectErrorString(ret));
     char buf[256] = {0};
     int lastSSLError = client.getLastSSLError(buf, sizeof(buf));
     if (lastSSLError) {
@@ -227,9 +267,10 @@ void mqttConnect() {
     delay(5000);
     retries--;
     if (retries == 0) {
-      // // basically die and wait for WDT to reset me
-      // while (1)
-      //   ;
+      // basically die and wait for WDT to reset me
+      while (1) {
+        delay(1000);
+      }
       return;
     }
   }
@@ -265,28 +306,43 @@ void tickerStart() {
 }
 
 void webConfig() {
-  WiFiManagerParameter custom_mqtt_server("server", "mqtt server",
-                                          conf["mqtt_server"], 64);
+  String oriServer = (const char*)conf["mqtt_server"];
+  WiFiManagerParameter custom_mqtt_server(
+      "server", "mqtt server",
+      oriServer.length() ? oriServer.c_str() : "m1.tuyacn.com", 64);
+  int oriPort = (int)conf["mqtt_port"];
   WiFiManagerParameter custom_mqtt_port(
-      "port", "mqtt port", String((int)conf["mqtt_port"]).c_str(), 6);
+      "port", "mqtt port", String(oriPort ? oriPort : 8883).c_str(), 6);
   WiFiManagerParameter custom_mqtts_ca_cert("ca_cert", "ca cert",
                                             conf["ca_cert"], 2048);
-  WiFiManagerParameter custom_mqtts_fingerprint(
-      "fingerprint", "sha1 fingerprint", conf["fingerprint"], 128);
-  WiFiManagerParameter custom_password("password", "mqtt password",
-                                       conf["password"], 64);
   WiFiManagerParameter custom_buptnet_user("buptnet_user", "buptnet user",
                                            conf["buptnet_user"], 16);
   WiFiManagerParameter custom_buptnet_pass("buptnet_pass", "buptnet pass", NULL,
                                            64);
 
+#if USE_TUYA
+  WiFiManagerParameter custom_ty_device_id("ty_device_id", "tuya device id",
+                                           conf["ty_device_id"], 64);
+  WiFiManagerParameter custom_ty_device_secret("ty_device_secret",
+                                               "tuya device secret", NULL, 64);
+#else
+  WiFiManagerParameter custom_password("password", "mqtt password",
+                                       conf["password"], 64);
+#endif
+
   wm.addParameter(&custom_mqtt_server);
   wm.addParameter(&custom_mqtt_port);
   wm.addParameter(&custom_mqtts_ca_cert);
-  wm.addParameter(&custom_mqtts_fingerprint);
-  wm.addParameter(&custom_password);
   wm.addParameter(&custom_buptnet_user);
   wm.addParameter(&custom_buptnet_pass);
+
+#if USE_TUYA
+  wm.addParameter(&custom_ty_device_id);
+  wm.addParameter(&custom_ty_device_secret);
+#else
+  wm.addParameter(&custom_password);
+#endif
+
   wm.setConfigPortalBlocking(false);
   wm.startConfigPortal();
   while (wm.getConfigPortalActive()) {
@@ -303,11 +359,15 @@ void webConfig() {
   // Serial.println("ca_cert: ");
   // Serial.println(custom_mqtts_ca_cert.getValue());
 
-  conf["fingerprint"] = custom_mqtts_fingerprint.getValue();
-  // Serial.println("fingerprint: ");
-  // Serial.println(custom_mqtts_fingerprint.getValue());
-
+#if USE_TUYA
+  conf["ty_device_id"] = custom_ty_device_id.getValue();
+  if (strlen(custom_ty_device_secret.getValue())) {
+    conf["ty_device_secret"] = custom_ty_device_secret.getValue();
+  }
+#else
   conf["password"] = custom_password.getValue();
+#endif
+
   conf["buptnet_user"] = custom_buptnet_user.getValue();
   if (strlen(custom_buptnet_pass.getValue())) {
     conf["buptnet_pass"] = custom_buptnet_pass.getValue();
@@ -397,10 +457,8 @@ void setup() {
 
   uint32_t id = system_get_chip_id();
   sprintf(idChar, "%06X", id);
-  // Serial.print("chip id: ");
-  // Serial.println(id, HEX);
-
-  username = "ESP_" + String(idChar);
+  Serial.print("chip id: ");
+  Serial.println(id, HEX);
 
   if (!LittleFS.begin()) {
     // Serial.println("Failed to mount file system");
@@ -412,12 +470,48 @@ void setup() {
   delay(1000);
   digitalWrite(LED_BLUE, LED_OFF);
   digitalWrite(LED_RED, LED_OFF);
-  if (!loadConfig() || !wm.getWiFiIsSaved() ||
-      rstInfo->reason == REASON_EXT_SYS_RST || digitalRead(BUTTON) == LOW) {
+
+#ifdef TEST_H
+  if (digitalRead(BUTTON) == LOW) {
     webConfig();
   }
+#else
+  if (rstInfo->reason == REASON_EXT_SYS_RST || digitalRead(BUTTON) == LOW) {
+    webConfig();
+  }
+#endif
 
   attachInterrupt(digitalPinToInterrupt(BUTTON), handleKeyPress, FALLING);
+
+#ifdef TEST_H
+  conf["mqtt_server"] = MQTT_SERVER;
+  conf["mqtt_port"] = MQTT_PORT;
+  conf["ca_cert"] = CA_CERT;
+  conf["buptnet_user"] = BUPTNET_USER;
+  conf["buptnet_pass"] = BUPTNET_PASS;
+  conf["ty_device_id"] = TY_DEVICE_ID;
+  conf["ty_device_secret"] = TY_DEVICE_SECRET;
+  conf["password"] = PASSWORD;
+#else
+  if (!loadConfig() || !wm.getWiFiIsSaved()) {
+    // Serial.println("Failed to load config");
+    while (1) {
+      delay(1000);
+    }
+  }
+#endif
+
+#if USE_TUYA
+  Serial.println("use tuya");
+  TYDeviceID = (const char*)conf["ty_device_id"];
+  TYDeviceSecret = (const char*)conf["ty_device_secret"];
+  if (!TYDeviceID.length() || !TYDeviceSecret.length()) {
+    Serial.println("tuya device id or secret is empty");
+    while (1) {
+      delay(1000);
+    }
+  }
+#endif
 
   wifiInit();
 

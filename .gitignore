@@ -1,2 +1,4 @@
 build/
 .vscode/
+tuya_test.py
+test.h

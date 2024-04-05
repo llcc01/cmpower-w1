@@ -67,6 +67,7 @@ bool testPage(const String& url, String& retLoc) {
       // file found at server
       if (httpCode == HTTP_CODE_OK) {
         res = true;
+        // Serial.println(httpTest.getString());
       } else {
         retLoc = httpTest.getLocation();
       }
