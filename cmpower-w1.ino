@@ -2,8 +2,7 @@
 extern "C" {
 #include "user_interface.h"
 }
-#include <Adafruit_MQTT.h>
-#include <Adafruit_MQTT_Client.h>
+#include <ArduinoMqttClient.h>
 #include <Arduino_JSON.h>
 #include <Crypto.h>
 #include <ESP8266HTTPClient.h>
@@ -18,7 +17,7 @@ extern "C" {
 #include "conf.h"
 #include "net-login.h"
 #include "sy7t609.h"
-#include "test.h"
+// #include "test.h"
 
 /************************* WiFi Access Point *********************************/
 
@@ -50,7 +49,11 @@ String password;
 String subTopic;
 String pubTopic;
 
+// for campatible with tuya
 #if USE_TUYA
+String setTopic;
+String execTopic;
+
 String TYDeviceID;
 String TYDeviceSecret;
 #endif
@@ -60,17 +63,13 @@ WiFiClientSecure client;
 
 // Setup the MQTT client class by passing in the WiFi client and MQTT server and
 // login details.
-Adafruit_MQTT_Client* mqtt = NULL;
-
-Adafruit_MQTT_Subscribe* cmdCallbackSub = NULL;
+MqttClient mqtt(client);
 
 /**NTP**/
 const char* ntpServerName = "cn.pool.ntp.org";
 
 /**** Ticker ****/
-Ticker pingTicker;
 #define MQTT_PING_TIME 120  // second
-static bool pingTickerTimeoutFlag = false;
 
 Ticker sensorTicker;
 #define SENSOR_TIME 60  // second
@@ -107,11 +106,55 @@ int getCmdSwitch(JSONVar* cmd, const String& key) {
   return f ? CMD_SWITCH_ON : CMD_SWITCH_OFF;
 }
 
-void cmdCallback(char* data, uint16_t len) {
+void onMqttMessage(int len) {
+  // Serial.println("onMqttMessage");
+  String topic = mqtt.messageTopic();
+  // Serial.println(topic);
+  JSONVar root;
+  JSONVar cmd;
+
+  String data = mqtt.readString();
   // Serial.println(data);
-  JSONVar cmd = JSON.parse(data);
-  if (JSON.typeof(cmd) == "undefined") {
-    // Serial.println("Parsing cmd failed!");
+
+  if (topic == subTopic) {
+    cmd = JSON.parse(data);
+    if (JSON.typeof(root) == "undefined") {
+      // Serial.println("Parsing cmd failed!");
+      return;
+    }
+#if USE_TUYA
+  } else if (topic == setTopic) {
+    root = JSON.parse(data);
+    if (JSON.typeof(root) == "undefined") {
+      // Serial.println("Parsing setObj failed!");
+      return;
+    }
+    if (root.hasOwnProperty("data") == false) {
+      // Serial.println("Parsing data failed!");
+      return;
+    }
+    cmd = root["data"];
+  } else if (topic == execTopic) {
+    root = JSON.parse(data);
+    if (JSON.typeof(root) == "undefined") {
+      // Serial.println("Parsing execObj failed!");
+      return;
+    }
+    if (root.hasOwnProperty("data") == false) {
+      // Serial.println("Parsing data failed!");
+      return;
+    }
+    JSONVar data = root["data"];
+    if (data.hasOwnProperty("actionCode") == false) {
+      // Serial.println("Parsing actionCode failed!");
+      return;
+    }
+    const char* actionCode = data["actionCode"];
+    // Serial.println(actionCode);
+    cmd[actionCode] = "1";
+#endif
+  } else {
+    // Serial.println("Unknown topic");
     return;
   }
 
@@ -129,7 +172,11 @@ void cmdCallback(char* data, uint16_t len) {
     clearEnergyCounters();
   }
 
-  if (cmd.hasOwnProperty("sensorUpdate")) {
+  if (cmd.hasOwnProperty("sensorUpdate")
+#if USE_TUYA
+      || topic != subTopic
+#endif
+  ) {
     sensorUpdate();
   }
 }
@@ -186,13 +233,9 @@ void mqttInit() {
     client.setFingerprint((const char*)conf["fingerprint"]);
   }
 
-  if (mqtt) {
-    delete mqtt;
-  }
-
 #if USE_TUYA
   while (time(nullptr) < TIMESTAMP_YEAR2024) {
-    Serial.println("waiting for ntp sync");
+    // Serial.println("waiting for ntp sync");
     delay(1000);
   }
 
@@ -207,7 +250,10 @@ void mqttInit() {
   password = experimental::crypto::SHA256::hmac(content, TYDeviceSecret.c_str(),
                                                 TYDeviceSecret.length(), 32);
   password.toLowerCase();
-  subTopic = "tylink/" + TYDeviceID + "/thing/action/execute";
+  subTopic = "tylink/" + TYDeviceID + "/channel/raw/down";
+  pubTopic = "tylink/" + TYDeviceID + "/channel/raw/up";
+  setTopic = "tylink/" + TYDeviceID + "/thing/property/set";
+  execTopic = "tylink/" + TYDeviceID + "/thing/action/execute";
 #else
   subTopic = String("/") + username + "/cmd";
   pubTopic = String("/") + username + "/status";
@@ -216,41 +262,34 @@ void mqttInit() {
   clientId = "ESP_" + String(idChar);
   password = (const char*)conf["password"];
 #endif
-  Serial.printf("clientId: %s\nusername: %s\npassword: %s\nsub topic: %s\n",
-                clientId.c_str(), username.c_str(), password.c_str(),
-                subTopic.c_str());
+  // Serial.printf("clientId: %s\nusername: %s\npassword: %s\nsub topic: %s\n",
+  //               clientId.c_str(), username.c_str(), password.c_str(),
+  //               subTopic.c_str());
 
-  mqtt = new Adafruit_MQTT_Client(&client, (const char*)conf["mqtt_server"],
-                                  (int)conf["mqtt_port"], clientId.c_str(),
-                                  username.c_str(), password.c_str());
-
-  if (cmdCallbackSub) {
-    delete cmdCallbackSub;
-  }
-  cmdCallbackSub = new Adafruit_MQTT_Subscribe(mqtt, subTopic.c_str());
-
-  cmdCallbackSub->setCallback(cmdCallback);
-
-  mqtt->subscribe(cmdCallbackSub);
-
-  mqtt->setKeepAliveInterval(MQTT_PING_TIME);
+  mqtt.setId(clientId);
+  mqtt.setUsernamePassword(username, password);
+  mqtt.setKeepAliveInterval(MQTT_PING_TIME);
+  mqtt.onMessage(onMqttMessage);
 }
 
 void mqttConnect() {
   int8_t ret;
 
   // Stop if already connected.
-  if (mqtt->connected()) {
+  if (mqtt.connected()) {
     return;
   }
 
-  Serial.printf("Connecting to mqtt->.. %s:%d\n",
-                (const char*)conf["mqtt_server"], (int)conf["mqtt_port"]);
+  // Serial.printf("Connecting to mqtt-> %s:%d\n",
+  //               (const char*)conf["mqtt_server"], (int)conf["mqtt_port"]);
 
-  uint8_t retries = 1;
-  while ((ret = mqtt->connect()) != 0) {  // connect will return 0 for connected
+  uint8_t retries = 5;
+  while (!mqtt.connect(
+      (const char*)conf["mqtt_server"],
+      (int)conf["mqtt_port"])) {  // connect will return 0 for connected
     digitalWrite(LED_RED, !digitalRead(LED_RED));
-    Serial.println(mqtt->connectErrorString(ret));
+    // Serial.print("MQTT connection failed! Error code = ");
+    // Serial.println(mqtt.connectError());
     char buf[256] = {0};
     int lastSSLError = client.getLastSSLError(buf, sizeof(buf));
     if (lastSSLError) {
@@ -263,47 +302,32 @@ void mqttConnect() {
       // Serial.printf("SSL error: %d\n%s\n", lastSSLError, buf);
     }
     // Serial.println("Retrying MQTT connection in 5 seconds...");
-    mqtt->disconnect();
-    delay(5000);
+    // mqtt.disconnect();
+    delay(1000);
     retries--;
     if (retries == 0) {
       // basically die and wait for WDT to reset me
-      while (1) {
-        delay(1000);
-      }
+      // while (1) {
+      //   delay(1000);
+      // }
       return;
     }
   }
 
   // Serial.println("MQTT Connected!");
 
+  mqtt.subscribe(subTopic);
+#if USE_TUYA
+  mqtt.subscribe(setTopic);
+  mqtt.subscribe(execTopic);
+#endif
+
   tickerStart();
 }
 
-void mqttPing() {
-  if (!mqtt->connected()) {
-    return;
-  }
-
-  digitalWrite(LED_RED, LED_OFF);
-  if (!mqtt->ping()) {
-    mqtt->disconnect();
-    pingTicker.detach();
-    sensorTicker.detach();
-    return;
-  }
-  delay(100);
-  digitalWrite(LED_RED, LED_ON);
-}
-
-void pingTickerTimeout() { pingTickerTimeoutFlag = true; }
-
 void sensorTickerTimeout() { sensorTickerTimeoutFlag = true; }
 
-void tickerStart() {
-  pingTicker.attach(MQTT_PING_TIME, pingTickerTimeout);
-  sensorTicker.attach(SENSOR_TIME, sensorTickerTimeout);
-}
+void tickerStart() { sensorTicker.attach(SENSOR_TIME, sensorTickerTimeout); }
 
 void webConfig() {
   String oriServer = (const char*)conf["mqtt_server"];
@@ -410,15 +434,26 @@ void ICACHE_RAM_ATTR handleKeyPress() {
 }
 
 void sensorUpdate() {
-  // // Serial.println("sensor update");
+  // Serial.println("sensor update");
   // digitalWrite(LED_RED, !digitalRead(LED_RED));
 
-  sy7t609MeasurementProcess();
-
-  sy7t609_info_t info = getSy7t609Info();
   JSONVar data;
   data["ry1"] = digitalRead(RY1_IO) == RY_ON;
   data["ry2"] = digitalRead(RY2_IO) == RY_ON;
+
+  sy7t609_info_t info = getSy7t609Info();
+  sy7t609MeasurementProcess();
+
+#if USE_TUYA
+  data["power"] = info.power / 1000.0;
+  data["avg_power"] = info.avg_power / 1000.0;
+  data["vrms"] = info.vrms / 1000.0;
+  data["irms"] = info.irms / 1000.0;
+  data["freq"] = info.freq / 1000.0;
+  data["pf"] = info.pf / 1000.0;
+  data["epp_cnt"] = info.epp_cnt;
+  // data["epm_cnt"] = info.epm_cnt;
+#else
   data["power"] = info.power;
   data["avg_power"] = info.avg_power;
   data["vrms"] = info.vrms;
@@ -427,18 +462,41 @@ void sensorUpdate() {
   data["pf"] = info.pf;
   data["epp_cnt"] = info.epp_cnt;
   data["epm_cnt"] = info.epm_cnt;
-  mqtt->publish(pubTopic.c_str(), JSON.stringify(data).c_str());
+#endif
+
+#if USE_TUYA
+  // add special data for tuya
+  mqttPublish(pubTopic, (" " + JSON.stringify(data)).c_str());
+#else
+  mqttPublish(pubTopic, JSON.stringify(data).c_str());
+#endif
+}
+
+void mqttPublish(String& topic, const char* data) {
+  if (!mqtt.connected()) {
+    return;
+  }
+  // Serial.print("Publishing to ");
+  // Serial.print(topic);
+  // Serial.print(" -> ");
+  // Serial.println(data);
+
+  mqtt.beginMessage(topic, strlen(data), false, 0, false);
+  mqtt.print(data);
+  mqtt.endMessage();
 }
 
 void reportErr(String name, size_t errCode) {
-  if (!mqtt->connected()) {
+  return;
+
+  if (!mqtt.connected()) {
     return;
   }
 
   JSONVar data;
   data["err"] = name;
   data["errCode"] = errCode;
-  mqtt->publish(pubTopic.c_str(), JSON.stringify(data).c_str());
+  mqttPublish(pubTopic, JSON.stringify(data).c_str());
 }
 
 void setup() {
@@ -457,8 +515,8 @@ void setup() {
 
   uint32_t id = system_get_chip_id();
   sprintf(idChar, "%06X", id);
-  Serial.print("chip id: ");
-  Serial.println(id, HEX);
+  // Serial.print("chip id: ");
+  // Serial.println(id, HEX);
 
   if (!LittleFS.begin()) {
     // Serial.println("Failed to mount file system");
@@ -470,6 +528,8 @@ void setup() {
   delay(1000);
   digitalWrite(LED_BLUE, LED_OFF);
   digitalWrite(LED_RED, LED_OFF);
+
+  bool loadRes = loadConfig();
 
 #ifdef TEST_H
   if (digitalRead(BUTTON) == LOW) {
@@ -493,7 +553,7 @@ void setup() {
   conf["ty_device_secret"] = TY_DEVICE_SECRET;
   conf["password"] = PASSWORD;
 #else
-  if (!loadConfig() || !wm.getWiFiIsSaved()) {
+  if (!loadRes || !wm.getWiFiIsSaved()) {
     // Serial.println("Failed to load config");
     while (1) {
       delay(1000);
@@ -502,11 +562,11 @@ void setup() {
 #endif
 
 #if USE_TUYA
-  Serial.println("use tuya");
+  // Serial.println("use tuya");
   TYDeviceID = (const char*)conf["ty_device_id"];
   TYDeviceSecret = (const char*)conf["ty_device_secret"];
   if (!TYDeviceID.length() || !TYDeviceSecret.length()) {
-    Serial.println("tuya device id or secret is empty");
+    // Serial.println("tuya device id or secret is empty");
     while (1) {
       delay(1000);
     }
@@ -554,13 +614,9 @@ void loop() {
   } else {
     digitalWrite(LED_BLUE, LED_ON);
     mqttConnect();
-    if (mqtt->connected()) {
+    if (mqtt.connected()) {
       digitalWrite(LED_RED, LED_ON);
-      mqtt->processPackets(10);
-      if (pingTickerTimeoutFlag) {
-        pingTickerTimeoutFlag = false;
-        mqttPing();
-      }
+      mqtt.poll();
       if (sensorTickerTimeoutFlag) {
         sensorTickerTimeoutFlag = false;
         sensorUpdate();
