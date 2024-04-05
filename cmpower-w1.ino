@@ -23,7 +23,7 @@ extern "C" {
 
 #define TIMESTAMP_YEAR2024 1704067200
 
-#define USE_TUYA 1
+#define USE_TUYA 0
 
 #define RY1_IO 0
 #define RY2_IO 12
