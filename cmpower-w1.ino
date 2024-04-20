@@ -233,11 +233,12 @@ void mqttInit() {
     client.setFingerprint((const char*)conf["fingerprint"]);
   }
 
-#if USE_TUYA
   while (time(nullptr) < TIMESTAMP_YEAR2024) {
     // Serial.println("waiting for ntp sync");
     delay(1000);
   }
+
+#if USE_TUYA
 
   clientId = "tuyalink_" + TYDeviceID;
 
