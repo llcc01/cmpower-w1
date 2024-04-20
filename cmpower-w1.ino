@@ -255,12 +255,12 @@ void mqttInit() {
   setTopic = "tylink/" + TYDeviceID + "/thing/property/set";
   execTopic = "tylink/" + TYDeviceID + "/thing/action/execute";
 #else
-  subTopic = String("/") + username + "/cmd";
-  pubTopic = String("/") + username + "/status";
-
   username = "ESP_" + String(idChar);
   clientId = "ESP_" + String(idChar);
   password = (const char*)conf["password"];
+
+  subTopic = String("/") + username + "/cmd";
+  pubTopic = String("/") + username + "/status";
 #endif
   // Serial.printf("clientId: %s\nusername: %s\npassword: %s\nsub topic: %s\n",
   //               clientId.c_str(), username.c_str(), password.c_str(),
