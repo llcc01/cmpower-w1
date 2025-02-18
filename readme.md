@@ -51,6 +51,10 @@ JSON 封装
   - 干路继电器控制，true/false
 - ry2
   - 支路继电器控制，true/false
+- ry1_restart
+  - 干路继电器断开整数n秒后接通，最长10秒
+- ry2_restart
+  - 支路继电器断开整数n秒后接通，最长10秒
 - counterReset
   - 重置计量数据
 - sensorUpdate

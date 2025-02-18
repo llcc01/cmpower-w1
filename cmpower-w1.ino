@@ -118,7 +118,7 @@ void onMqttMessage(int len) {
 
   if (topic == subTopic) {
     cmd = JSON.parse(data);
-    if (JSON.typeof(root) == "undefined") {
+    if (JSON.typeof(cmd) == "undefined") {
       // Serial.println("Parsing cmd failed!");
       return;
     }
@@ -166,6 +166,26 @@ void onMqttMessage(int len) {
   int ry2 = getCmdSwitch(&cmd, "ry2");
   if (ry2 >= 0) {
     setRy2(ry2);
+  }
+
+  if (cmd.hasOwnProperty("ry1_restart")) {
+    unsigned long t = (unsigned long)cmd["ry1_restart"];
+    if (t > 10) {
+      t = 10;
+    }
+    setRy1(false);
+    delay(t * 1000);
+    setRy1(true);
+  }
+
+  if (cmd.hasOwnProperty("ry2_restart")) {
+    unsigned long t = (unsigned long)cmd["ry2_restart"];
+    if (t > 10) {
+      t = 10;
+    }
+    setRy2(false);
+    delay(t * 1000);
+    setRy2(true);
   }
 
   if (cmd.hasOwnProperty("counterReset")) {
@@ -216,7 +236,7 @@ void wifiInit() {
 }
 
 void mqttInit() {
-  // check the fingerprint SSL cert
+
   // X509List *certList = new X509List(clientCert);
   // PrivateKey *priKey = new PrivateKey(clientPrivateKey);
   // client.setClientRSACert(certList, priKey);
@@ -229,8 +249,6 @@ void mqttInit() {
     caStr.replace("#", " ");
     X509List* ca = new X509List(caStr.c_str());
     client.setTrustAnchors(ca);
-  } else if (strlen((const char*)conf["fingerprint"])) {
-    client.setFingerprint((const char*)conf["fingerprint"]);
   }
 
   while (time(nullptr) < TIMESTAMP_YEAR2024) {
@@ -243,10 +261,8 @@ void mqttInit() {
   clientId = "tuyalink_" + TYDeviceID;
 
   String timestamp = String(time(nullptr));
-  username = TYDeviceID + "|signMethod=hmacSha256,timestamp=" + timestamp +
-             ",secureMode=1,accessType=1";
-  String content = "deviceId=" + TYDeviceID + ",timestamp=" + timestamp +
-                   ",secureMode=1,accessType=1";
+  username = TYDeviceID + "|signMethod=hmacSha256,timestamp=" + timestamp + ",secureMode=1,accessType=1";
+  String content = "deviceId=" + TYDeviceID + ",timestamp=" + timestamp + ",secureMode=1,accessType=1";
 
   password = experimental::crypto::SHA256::hmac(content, TYDeviceSecret.c_str(),
                                                 TYDeviceSecret.length(), 32);
@@ -286,12 +302,12 @@ void mqttConnect() {
 
   uint8_t retries = 5;
   while (!mqtt.connect(
-      (const char*)conf["mqtt_server"],
-      (int)conf["mqtt_port"])) {  // connect will return 0 for connected
+    (const char*)conf["mqtt_server"],
+    (int)conf["mqtt_port"])) {  // connect will return 0 for connected
     digitalWrite(LED_RED, !digitalRead(LED_RED));
     // Serial.print("MQTT connection failed! Error code = ");
     // Serial.println(mqtt.connectError());
-    char buf[256] = {0};
+    char buf[256] = { 0 };
     int lastSSLError = client.getLastSSLError(buf, sizeof(buf));
     if (lastSSLError) {
       String caStr = (const char*)conf["ca_cert"];
@@ -299,7 +315,6 @@ void mqttConnect() {
       caStr.replace(" ", "\n");
       caStr.replace("#", " ");
       // Serial.printf("ca_cert: %s\n", caStr.c_str());
-      // Serial.printf("fingerprint: %s\n", (const char*)conf["fingerprint"]);
       // Serial.printf("SSL error: %d\n%s\n", lastSSLError, buf);
     }
     // Serial.println("Retrying MQTT connection in 5 seconds...");
@@ -326,18 +341,22 @@ void mqttConnect() {
   tickerStart();
 }
 
-void sensorTickerTimeout() { sensorTickerTimeoutFlag = true; }
+void sensorTickerTimeout() {
+  sensorTickerTimeoutFlag = true;
+}
 
-void tickerStart() { sensorTicker.attach(SENSOR_TIME, sensorTickerTimeout); }
+void tickerStart() {
+  sensorTicker.attach(SENSOR_TIME, sensorTickerTimeout);
+}
 
 void webConfig() {
   String oriServer = (const char*)conf["mqtt_server"];
   WiFiManagerParameter custom_mqtt_server(
-      "server", "mqtt server",
-      oriServer.length() ? oriServer.c_str() : "m1.tuyacn.com", 64);
+    "server", "mqtt server",
+    oriServer.length() ? oriServer.c_str() : "m1.tuyacn.com", 64);
   int oriPort = (int)conf["mqtt_port"];
   WiFiManagerParameter custom_mqtt_port(
-      "port", "mqtt port", String(oriPort ? oriPort : 8883).c_str(), 6);
+    "port", "mqtt port", String(oriPort ? oriPort : 8883).c_str(), 6);
   WiFiManagerParameter custom_mqtts_ca_cert("ca_cert", "ca cert",
                                             conf["ca_cert"], 2048);
   WiFiManagerParameter custom_buptnet_user("buptnet_user", "buptnet user",
@@ -502,7 +521,7 @@ void reportErr(String name, size_t errCode) {
 
 void setup() {
   ioInit();
-  setRy1(false);
+  setRy1(true);
   setRy2(false);
   digitalWrite(LED_PWR, LED_ON);
   digitalWrite(LED_RED, LED_ON);
