@@ -364,6 +364,12 @@ void webConfig() {
   WiFiManagerParameter custom_buptnet_pass("buptnet_pass", "buptnet pass", NULL,
                                            64);
 
+  WiFiManagerParameter custom_ry1_default("ry1_default", "ry1 default (on: 1, off: 0)",
+                                          conf["ry1_default"], 4);
+
+  WiFiManagerParameter custom_ry2_default("ry2_default", "ry2 default (on: 1, off: 0)",
+                                          conf["ry2_default"], 4);
+
 #if USE_TUYA
   WiFiManagerParameter custom_ty_device_id("ty_device_id", "tuya device id",
                                            conf["ty_device_id"], 64);
@@ -379,6 +385,8 @@ void webConfig() {
   wm.addParameter(&custom_mqtts_ca_cert);
   wm.addParameter(&custom_buptnet_user);
   wm.addParameter(&custom_buptnet_pass);
+  wm.addParameter(&custom_ry1_default);
+  wm.addParameter(&custom_ry2_default);
 
 #if USE_TUYA
   wm.addParameter(&custom_ty_device_id);
@@ -416,6 +424,9 @@ void webConfig() {
   if (strlen(custom_buptnet_pass.getValue())) {
     conf["buptnet_pass"] = custom_buptnet_pass.getValue();
   }
+
+  conf["ry1_default"] = custom_ry1_default.getValue();
+  conf["ry2_default"] = custom_ry2_default.getValue();
   saveConfig();
   wm.reboot();
 }
@@ -521,7 +532,7 @@ void reportErr(String name, size_t errCode) {
 
 void setup() {
   ioInit();
-  setRy1(true);
+  setRy1(false);
   setRy2(false);
   digitalWrite(LED_PWR, LED_ON);
   digitalWrite(LED_RED, LED_ON);
@@ -580,6 +591,9 @@ void setup() {
     }
   }
 #endif
+
+  setRy1((const String)conf["ry1_default"] == "1");
+  setRy2((const String)conf["ry2_default"] == "1");
 
 #if USE_TUYA
   // Serial.println("use tuya");
